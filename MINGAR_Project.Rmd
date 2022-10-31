@@ -1,0 +1,352 @@
+---
+title: "Data Analysis and Insights for MINGAR"
+subtitle: "We found there to be a difference between customers and a significant association between skin color and data issues"
+author: "Report prepared for MINGAR by Stats and Co"
+date: 2022-04-07
+lang: "en"
+output: github_document
+titlepage: true
+titlepage-color: "CD178D"
+titlepage-text-color: "FFFFFF"
+titlepage-rule-color: "FFFFFF"
+titlepage-rule-height: 2
+---
+
+```{r include=FALSE, echo=FALSE, message=FALSE}
+
+# Setting up libraries
+
+library(tidyverse)
+library(lme4)
+library(polite)
+library(lmtest)
+library(gridExtra)
+
+
+# this should suppress all code and messages
+knitr::opts_chunk$set(echo=FALSE)
+```
+
+
+```{r}
+# Loading data 
+
+# read in the data (this will only work once you've set up the data!)
+
+cust_data <- read_rds("data/cust_dev_info.Rds")
+
+dev_data <- read_rds("data/dev_sleep.Rds")
+
+cust_sleep <- read_rds("data/cust_sleep.Rds")
+
+cust_data <- cust_data %>%
+  mutate(new = ifelse(cust_data$line == "Advance" | cust_data$line == "Active", 1, 0))
+
+
+
+```
+
+
+\newpage
+# Executive summary
+
+_Guidelines for the executive summary:_
+
+
+MINGAR is a company that produces fitness tracking devices. The company has released a new line of products at a lower price 'Active' and 'Advance' to compete with  their competitor Bitfit. In order to assess MINGAR's current standing in the market, the aim of this study is to determine the user demographic of its new products as well as investigate if any of its products have performance issues related to sleep tracking for users of certain skin tone.
+
+## Key findings
+
+-  Customers that are purchasing the new and affordable product lines, "Active" and "Advance",  are generally in lower income postal code areas and are older in age in comparison to traditional customers of MINGAR's other lines.
+
+- Furthermore, for every `r toString(signif(1 / (max(cust_data$age) - min(cust_data$age)), 2))` year increase in customer age, the odds of that customer purchasing a device from MINGAR's new line over a device from MINGAR's older lines increases by about 46%. 
+
+-  We also found that for every `r toString(signif(1 / (max(cust_data$hhld_median_inc) - min(cust_data$hhld_median_inc)), 3))` dollar increase in the median income (for the postal code), the odds of that customer having a device from MINGAR's new line over a device from MINGAR's other lines decreases by 96%.
+
+-  The average number of increase in flags for an increase in 1 minute in sleep is higher for customers that use dark skin tone emoji modifier compared to those that use lighter or default skin tone. 
+
+
+## Preliminary Visuals
+
+Firstly, I decided to look at the breakdown of sex in MINGAR's customer database, this would be the first indicator of a difference between new and traditional customers.
+
+```{r echo=FALSE, fig.cap="Bar Chart to show different Sex in customer database"}
+
+
+#looking at the sex breakdown of MINGARs customers
+ggplot(cust_data, aes(x=sex, fill=as.factor(sex))) + 
+  geom_bar() +
+  xlab("Sex") +
+  ylab("Count") +
+  facet_wrap(~ new) +
+  theme_minimal()
+
+```
+
+From the figure above, we can conclude that MINGAR had more female customers in both the new and traditional segments.
+
+
+
+\newpage
+# Technical report
+
+
+## Introduction
+
+
+MINGAR is a company that creates fitness tracking devices. The goal of this report was to help MINGAR better understand their customers and complaints. The first section addresses if there is a difference between new and traditianal customers. This was done by grouping the customers into those who own the new and affordable "Advance" and "Active" lines. Next, we investigated the descriptive statistics of each segment. Furthermore, the report investigates the complaints about product's performance with sleep score with respect to a users skin tone. This included a statistical analysis by creating variaus models to see if this claim has any truth to it. 
+
+
+### Research questions
+
+
+- Who is MINGAR's market? Is there a difference in customer characteristics buying the new affordable lines, "Active" and "Advance" vs traditional customers?
+
+- Is there an association between a customers skin tone and data issues while trying to record their sleep score?
+
+## Is there a difference between new and old customers?
+
+To understand MINGAR's market, well first look at the descriptive statistics of the customer database.To split the customers into traditional and new customers, I created a variable called "new" =1 for a customer that owns a device from the new "Advance" of "Active" lines. This well help divide the customers into two segments. Looking at sex of customers considered either "new" or "traditional," we can see that MINGAR old and new devices are bought more often by females. Although overall there are both more male and female customers in the new customers segment, so we can see that more customers in general are attracted to the new and affordable lines.
+
+
+```{r fig.cap="Boxplots for distribution of median income in new and traditional customers"}
+cust_data %>%
+  ggplot(aes(x = hhld_median_inc)) +
+  geom_boxplot() +
+  facet_wrap(~new, 
+             nrow = 2,
+             labeller = labeller(new = c("1" = "New Customers", "0" = "Traditional Customers"))) +
+  ggtitle("Median Income of the Customer Sample") +
+  xlab("Median Income") +
+  theme_minimal()
+
+```
+The distribution of median income for both traditional and new customers is positively skewed with some outliers. However, this is not surprising when discussing income as there is typically a positive skew due to customers earning much more than the average. Hennce looking at the median is more robust. Comparing medians, both new and traditional customers have the same median, however, new customers tend to have less variation, as seen through the smaller IQR.
+
+```{r fig.cap="Boxplots for distribution of age in new and traditional customers"}
+
+cust_data %>%
+  ggplot(aes(x = age)) +
+  geom_boxplot() +
+  facet_wrap(~ new, 
+             nrow = 2,
+             labeller = labeller(new = c("1" = "New Customers", "0" = "Traditional Customers"))) +
+  ggtitle("Age of the Customer Sample") +
+  xlab("Age") +
+  theme_minimal()
+```
+MINGAR's traditional customers have a smaller median and less variation when it comes to age. It seems the new customers have a much larger variation in age as the interquartile range is much larger. A higher median suggests that the new customers are slightly older now.
+
+To understand if there is a difference between new and old customers, I want to build a statistical model. I'll be using a generalized linear mixed model as the response variable (new) is binary and we have a random effect and all the assumptions are met.
+
+We start by fitting a full GLMM with all of the potential predictors, including pronouns, median income, and age. Next I'll create a model without pronouns as I want to compare if it is a relevant predictor for this model.
+
+
+```{r include=FALSE, echo=FALSE, message=FALSE, warning=FALSE}
+
+# MODELS
+
+first_mod <- lme4::glmer(new ~ pronouns + scales::rescale(age) + scales::rescale(hhld_median_inc) + (1 | emoji_modifier), data = cust_data, family = 'binomial')
+
+no_age <- lme4::glmer(new ~ pronouns + scales::rescale(hhld_median_inc) + (1 | emoji_modifier), data = cust_data, family = 'binomial')
+
+no_pronouns <- lme4::glmer(new ~ scales::rescale(hhld_median_inc) + scales::rescale(age) + (1 | emoji_modifier), data = cust_data, family = 'binomial')
+
+# Conduct likelihood ratio tests
+lmtest::lrtest(no_age, first_mod)
+lmtest::lrtest(no_pronouns, first_mod)
+
+
+```
+
+Comparing the likelihood ratio tests of the three models we created. I can conclude that the most appropriate model includes the rescaled variables age and income, along with random effects. However, the pronouns variable is an irrelevant predictor in our model, therefore i have forgone it from the final model.
+
+```{r include=FALSE, echo=FALSE, message=FALSE}
+
+finalmod <- lme4::glmer(new ~ scales::rescale(age) + scales::rescale(hhld_median_inc) + (1 | emoji_modifier), data = cust_data, family = 'binomial')
+```
+
+```{r include=FALSE, echo=FALSE, message=FALSE}
+
+# get and format estimates and CI from final model
+ests <- format(round(exp(summary(finalmod)$coeff)[,1], 2), nsmall = 2)
+confint <- confint(finalmod)
+ci <- format(round(exp(confint),2)[-1,], nsmall = 2)
+ci_format <- str_c("(", trimws(ci[,1]), ", ", ci[,2], ")")
+```
+
+```{r echo=FALSE}
+# create table for odds ratio and confidence intervals
+table <- cbind(ests, ci_format)
+rownames <- c("Baseline Odds", "Rescaled Age", "Rescaled Median Income")
+colnames <- c("Estimate", "95% CI")
+rownames(table) <- rownames
+colnames(table) <- colnames
+table %>%
+  knitr::kable(caption = "Odds Ratios and Corresponding 95 Percent Confidence Intervals")
+```
+
+In order to properly fit our final model, we had to rescale the variable of age and median income. The following equations were used to rescale these variables respectively:
+
+$$\text{age}_{\text{rescaled}} = \frac{\text{age}_\text{raw} - \min(\text{age})}{\max(\text{age}) - \min(\text{age})}$$
+
+$$\text{income}_{\text{rescaled}} = \frac{\text{income}_\text{raw} - \min(\text{income})}{\max(\text{income}) - \min(\text{income})}$$
+
+
+In the Table above first we can see the estimate of Baseline odds to be 1.91. This is interpreted as follows; when rescaled age and rescaled median income are both 0, the odds of that customer being a new customer is 1.91 to 1. To have a better understanding we can use the rescaling formula to find the raw age for this. Therfore, we can say that the odds ratio of a customer being a new customer is 1.91 to 1 when the customer has an age of `r toString(signif(min(cust_data$age), 2))`  and median income of `r toString(min(cust_data$hhld_median_inc))` CAD.
+
+
+Next, the estimate of the odds ratio for rescaled age is 1.46. This means that for every unit increase in rescaled age, the odds of a customer being a new customer increase by about 46%. Again, using our rescale formulae from above, a unit increase in rescaled age corresponds to a raw age so we conclude that for every approximately `r toString(signif(1 / (max(cust_data$age) - min(cust_data$age)), 2))` year increase in a customer's age, the odds of that being a new customer increases by about 46%.
+
+
+Finally, we have that the estimate of the odds ratio corresponding to the rescaled median income is 0.04. Similar to the odds ratio for rescaled age, it means that for every unit increase in rescaled median income, the odds of being a new customer decreases by about 96%. Same method as above, we can conclude that for every approximately `r toString(signif(1 / (max(cust_data$hhld_median_inc) - min(cust_data$hhld_median_inc)), 3))` dollar increase in the median income of the postal area for a customer, the odds of that customer being a new customer decreases by about 96%.
+
+
+## Is there a relationship between skin tone and sleep score?
+
+Fir the second research question, we want to find out if their is a relationship between the color of customers skin and their sleep score recorded from their device. The question arises due to several complaints that devices are performing poorly for users with darker skin. We gathered device data from the Fitness Tracker hub () by web scraping. All data scraped was in line with the scrapping requirements of the website.
+
+Considering we had no data on the race or skin of a customer, our closest variable is the emoji-modifier of each customer. This variable was used as a proxy variable to predict a customers skin color. USing the Fitzpatrick scale, this variable was changed to a categorical variable with 5 variables from light skin ton to dark skin tone. 
+
+
+```{r fig.height=8, fig.cap="Boxplots for each skin tone displaying distirbution of duaration with respect to number of flags"}
+
+# boxplots for each emoji_modifier
+cust_sleep %>%
+  mutate(flags=as.factor(flags)) %>% 
+  ggplot() + # Plotting everything
+  aes(y=duration, x=flags) +
+  facet_wrap(~emoji_modifier) +
+  geom_boxplot() +
+  ylab("Sleep Duration") +
+  xlab("Flags") +
+  ggtitle("Box plot of distribution of sleep for each emoji modifier")+
+  coord_flip()+
+  theme_minimal()
+
+```
+
+Looking at the boxplots is definitely concerning while addressing the research question in context. Firstly, we can clearly see that the dark skin and medium-dark skin emoji modifiers have the highest number of flags (around 26), whilst other lighter skin tones have a highest number of flags at around 12. This discrepancy illustrates a relationship and some truth to the complaints that users are submitting. The relationship must be investigated further. Therefore we will lnow fit some models and compare to find the most suitable fit. Our first step was to see if an interaction variable is necessary.
+
+
+```{r include=FALSE, message=FALSE}
+
+# Models for Q2 
+
+# Setting defualt emoji as the reference level
+
+cust_sleep$emoji_modifier <- factor( cust_sleep$emoji_modifier , ordered = FALSE )
+
+cust_sleep <- cust_sleep %>% 
+  mutate(emoji_modifier = relevel(emoji_modifier, ref = "Default"))
+
+# first to test if an interaction variable is needed for our model
+
+sleep_mod1 <- lm(flags ~ duration*emoji_modifier, data=cust_sleep)
+
+sleep_mod2 <- lm(flags ~ duration + emoji_modifier, data = cust_sleep)
+
+
+lmtest::lrtest(sleep_mod1, sleep_mod2)
+
+# Significant difference therefore an interaction is needed
+
+```
+
+After a likelihood test, we discovered that an interaction variable is needed. Furthermore, we should try and add more predictors to see if we can better fit the model. The most relevant variables that could affect the number of flags occurring during sleep are age, sex, duration. Also the number of flags could be due to the line of device that a customer is using. Therefore, we should also fit a model including the line variable and compare if it is a relevant predictor for the variable we are interested in.
+```{r include=FALSE, message=FALSE}
+
+# Modelling
+
+sleep_full_mod <- lmer(flags ~ duration*emoji_modifier + (1|age) + (1|sex), data = cust_sleep)
+
+sleep_age_mod <- lmer(flags ~ duration*emoji_modifier + (1|sex), data = cust_sleep)
+
+sleep_sex_mod <- lmer(flags ~ duration*emoji_modifier + (1|age), data = cust_sleep)
+
+
+lmtest::lrtest(sleep_sex_mod, sleep_full_mod)
+lmtest::lrtest(sleep_sex_mod, sleep_full_mod)
+
+# likelihood ratio tests indicate that both sex and age are not relevant predictors for our final model
+
+```
+After comparing 3 more models, we can conclude that the initial fixed LM model is the most appropriate for our data. To avoid overfitting a model, I will use the model with just an interaction term between uration of sleep and emoji modifier as the predictors for the number of flags.
+
+```{r}
+table <- tibble(`Skin Tone (emoji_modifier)` = c("Default", 
+                                 "Light Skin Tone", 
+                                 "Medium-Light Skin Tone",
+                                 "Medium Skin Tone", 
+                                 "Medium-Dark Skin Tone", 
+                                 "Dark Skin Tone"), 
+       `Model Coefficients` = c(0.0065,0.0030,0.0075,0.0113,0.0224,0.0354))
+
+ table %>% 
+   knitr::kable(caption = "Average Increase in Flags for an extra 1 minute in duration")
+```
+
+The coefficients of the final LM model are quite concerning. There is a statistically significant relationship between the skin tone of an emoji and the number of flags bought up during a sleep session. The estimates represent the average increase in flags for a 1 minute increase in the duration of sleep for each emoji modifier. The model suggests that the average increase of flags increases progressively with the highest average for a dark skin tone. This suggest that the complaints MINGAR are receiving are true and should be fixed immediately.
+
+## Discussion
+
+Using the "Advance" and "Active" lines to divide MINGAR's customer database into new and old customers, we investigated for a potential difference between these two segments to understand if they differ. We discovered that there is a slight difference between their traditional and new customers. For example, using the odds ratios test, we found out that for every `r toString(signif(1 / (max(cust_data$income) - min(cust_data$income)), 3))` increase in median income for the postal code that customer resides in, the odds of that customer being a "new" customer decreases by 96%
+
+Research question 2 studies if there is a relationship between the number of flags given in a sleep cycle, and the emoji_modifier used by that customer and duration of sleep. The initial analysis of boxplots showed that there is some type of relationship where the darker skin tones, recieve a higher volume of flags whilst calculating their sleep score. Our final model, consisted of a fixed linear model with no interactions, this was determined to be the most suitable model. The analysis confirmed the results as the average number of flags increases as the emoji_modifier skin tone becomes darker. 
+
+
+### Strengths and limitations
+
+There are a number of limitations with the methods used to address the research question. For instance, customers buying the new "Advance" and "Active" lines from MINGAR are not necessarily new customers, but could also be traditional customers who changed devices due to numerous reason; such as features, price or destroying their old devices. This means are comparisons between the two segments are not ideal conditions. 
+
+One limitation whilst addressing the second research question, is the fact that we didn't have a direct variable for the race or ethnicity of a customer. This forces us to use the emoji_modifier variable as a proxy for skin tone. This is an obvious issue as the color you set for you emojis in no way translate to one's actual skin color. In addition, using this variable meant we have to account for the default variable. The customers that use this could be any skin color. 
+
+\newpage
+# Consultant information
+## Consultant profile
+
+
+**Hamza Khan**. A Senior Data Analyst, specializing in data visualization and analysis. Worked with multiple freelance projects to help firms interpret their data. I earned my my Bachelor's Degree in Economics and Statistics from the University of Toronto in 2023. 
+
+
+## Code of ethical conduct
+
+
+Stats and Co is has many ethical guidelines for statistical analyis when preparing and analyzing possibly sensitive data for customers. We ensure to not disclose any confidential data without permission from our clients, such as data on their customers and devices. Furthermore, we try to make careful conclusions about the data and the investigative questions given by our clarity to the best of our ability. Whilst webscraping, we promise to scrape data fully within the requirements listed by the website and/or API. Finally, with all our findings we wish to assist the general public in understanding and following how we have obtained our conclusions.
+
+
+
+\newpage
+# References
+
+
+Fitness tracker info hub. (n.d.). Retrieved April 3, 2022, 
+  from https://fitnesstrackerinfohub.netlify.app/.
+  
+Unicode, Inc. (n.d.). Full Emoji Modifier Sequences, v14.0. Unicode, Inc. 
+  Retrieved April 4, 2022, from 
+  https://unicode.org/emoji/charts/full-emoji-modifiers.html. 
+  
+von Bergmann, J., Dmitry Shkolnik, and Aaron Jacobs (2021). cancensus: R package
+  to access, retrieve, and work with Canadian Census data and geography. v0.4.2. 
+
+
+\newpage
+# Appendix
+
+
+## Web scraping industry data on fitness tracker devices
+
+Data on fitness tracker devices was scraped from a website. The website was called Fitness tracker info hub. Firstly, we looked at the scraping permissions of the website. The agent showed that we are allowed to scrape with atleast 12 seconds in between each request. Only neccessay data ws scraped from the page.
+
+
+## Accessing Census data on median household income
+
+Median income data based on postal code was attained through the Canadian census API. After creating an account on CensusMapper, Stats and Co followed the proper guidelines by retreiving an API key and referenced CencusMapper in our final report. The data is pbulic for us to use and complies with guidelines of the Statistics Canada Open Data Licence.
+
+## Accessing postcode conversion files
+
+Due to time constraints, postal code conversion data was not found through the Census Canada via the University of Toronto portal. Instead we opted to use the given data from the raw folder. 
+
+
+__Final advice: KNIT EARLY AND OFTEN!__
